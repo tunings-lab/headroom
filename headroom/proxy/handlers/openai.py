@@ -3700,7 +3700,11 @@ class OpenAIHandlerMixin:
                     # These are charged at 50% of the input price
                     prompt_details = usage.get("prompt_tokens_details") or {}
                     cache_read_tokens = prompt_details.get("cached_tokens", 0)
-                except (KeyError, TypeError, AttributeError) as e:
+                except (KeyError, TypeError, AttributeError, ValueError) as e:
+                    # ValueError covers json.JSONDecodeError: custom-base gateways
+                    # (LiteLLM, MLflow AI Gateway, CPA, self-hosted vLLM) and even
+                    # api.openai.com can return an empty/non-JSON body on some paths,
+                    # which otherwise escaped to the outer handler as a 502.
                     logger.debug(
                         f"[{request_id}] Failed to extract cached tokens from OpenAI response: {e}"
                     )
@@ -4593,7 +4597,9 @@ class OpenAIHandlerMixin:
                     details = usage.get("input_tokens_details")
                     if isinstance(details, dict):
                         cache_read_tokens = _usage_int(details.get("cached_tokens"))
-                except (KeyError, TypeError, AttributeError) as e:
+                except (KeyError, TypeError, AttributeError, ValueError) as e:
+                    # ValueError covers json.JSONDecodeError on empty/non-JSON bodies
+                    # from custom-base gateways (see chat-completions fix above).
                     logger.debug(
                         f"[{request_id}] Failed to extract cached tokens from OpenAI passthrough response: {e}"
                     )
