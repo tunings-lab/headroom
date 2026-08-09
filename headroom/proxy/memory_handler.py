@@ -32,6 +32,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from importlib.metadata import entry_points
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -88,6 +89,16 @@ NATIVE_MEMORY_BETA_HEADER = "context-management-2025-06-27"
 # Native memory tool type
 NATIVE_MEMORY_TOOL_TYPE = "memory_20250818"
 
+# Entry-point group for pluggable proxy-mode memory backends. External
+# packages register a callable under this group; the callable receives a
+# ``MemoryConfig`` and returns an object implementing the ``MemoryBackend``
+# protocol (headroom.memory.system.MemoryBackend).
+MEMORY_BACKEND_ENTRY_POINT_GROUP = "headroom.memory_backend"
+
+# Built-in backend names handled directly by ``_init_backend_locked``.
+# Any other value triggers entry-point discovery.
+_BUILTIN_MEMORY_BACKENDS = frozenset({"local", "qdrant-neo4j"})
+
 # Maximum time to wait for a single backend initialization (one-shot).
 # Applies to MemoryHandler._ensure_initialized. On timeout, _initialized
 # stays False so that subsequent requests retry instead of deadlocking.
@@ -125,7 +136,15 @@ class MemoryConfig:
     """
 
     enabled: bool = False
-    backend: Literal["local", "qdrant-neo4j"] = "local"
+    # ``backend`` accepts the built-in names ("local", "qdrant-neo4j"),
+    # the sentinel "external" (use ``external_backend_name`` to identify
+    # the provider), or any arbitrary provider name registered under the
+    # ``headroom.memory_backend`` entry-point group.
+    backend: str = "local"
+    # When ``backend == "external"``, the entry-point name to load from
+    # the ``headroom.memory_backend`` group. Ignored for built-in
+    # backends and when ``backend`` is itself a provider name.
+    external_backend_name: str = ""
     db_path: str = "headroom_memory.db"
     inject_tools: bool = True
     inject_context: bool = True
@@ -440,13 +459,87 @@ class MemoryHandler:
                 )
                 raise
         else:
-            raise ValueError(f"Unknown memory backend: {self.config.backend}")
+            await self._init_external_backend_locked()
 
         self._initialized = True
 
         # Auto-import from Memory Bridge if configured
         if self.config.bridge_enabled and self.config.bridge_auto_import:
             await self._init_and_import_bridge()
+
+    async def _init_external_backend_locked(self) -> None:
+        """Load a memory backend from the ``headroom.memory_backend`` entry-point group.
+
+        Called by ``_init_backend_locked`` when ``config.backend`` is neither
+        ``"local"`` nor ``"qdrant-neo4j"``. Two resolution modes:
+
+        - ``backend == "external"``: the provider name is taken from
+          ``config.external_backend_name``.
+        - Any other value: treated as the provider name directly.
+
+        The discovered entry-point callable receives the ``MemoryConfig``
+        and must return an object implementing the ``MemoryBackend``
+        protocol (``headroom.memory.system.MemoryBackend``). If the
+        returned object has an ``async`` ``ensure_initialized`` /
+        ``_ensure_initialized`` coroutine, it is awaited so the backend
+        can warm up connections, schema, etc.
+        """
+        backend_name = self.config.backend
+        if backend_name == "external":
+            backend_name = self.config.external_backend_name
+            if not backend_name:
+                raise ValueError(
+                    "Memory backend 'external' requires 'external_backend_name' "
+                    f"to be set to an entry-point name under "
+                    f"'{MEMORY_BACKEND_ENTRY_POINT_GROUP}'."
+                )
+
+        ep = next(
+            (
+                e
+                for e in entry_points(group=MEMORY_BACKEND_ENTRY_POINT_GROUP)
+                if e.name == backend_name
+            ),
+            None,
+        )
+        if ep is None:
+            raise ValueError(
+                f"No entry point registered under "
+                f"'{MEMORY_BACKEND_ENTRY_POINT_GROUP}' with name "
+                f"'{backend_name}'. Install the package that provides it "
+                f"or set MemoryConfig.backend to a built-in name "
+                f"({sorted(_BUILTIN_MEMORY_BACKENDS)})."
+            )
+
+        try:
+            factory = ep.load()
+            self._backend = factory(self.config)
+        except Exception as exc:
+            logger.error(
+                "Memory: failed to load external backend '%s' from "
+                "entry point %s: %s",
+                backend_name,
+                ep,
+                exc,
+            )
+            raise
+
+        # Give the backend a chance to warm up before we flip
+        # ``_initialized`` to True. We accept either of the two common
+        # async init method names used by built-in backends.
+        init = getattr(self._backend, "ensure_initialized", None) or getattr(
+            self._backend, "_ensure_initialized", None
+        )
+        if init is not None and callable(init):
+            result = init()
+            if inspect.isawaitable(result):
+                await result
+
+        logger.info(
+            "Memory: Initialized external backend '%s' (entry point: %s)",
+            backend_name,
+            ep,
+        )
 
     async def _init_and_import_bridge(self) -> None:
         """Initialize the Memory Bridge and run auto-import."""

@@ -1261,6 +1261,7 @@ class HeadroomProxy(
             memory_config = MemoryConfig(
                 enabled=True,
                 backend=config.memory_backend,
+                external_backend_name=config.memory_external_backend_name,
                 db_path=_mem_db_path,
                 inject_tools=config.memory_inject_tools,
                 use_native_tool=config.memory_use_native_tool,

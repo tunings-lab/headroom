@@ -881,7 +881,7 @@ class Headroom:
         self,
         *,
         enabled: bool = True,
-        backend: Literal["local", "qdrant-neo4j"] | None = None,
+        backend: str | None = None,
         mode: Literal["auto_tail", "tool"] | None = None,
         top_k: int | None = None,
         min_similarity: float | None = None,
