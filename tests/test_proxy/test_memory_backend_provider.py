@@ -185,16 +185,18 @@ class TestBuiltinsUnaffected:
         config = MemoryConfig(enabled=True, backend="local")
         handler = MemoryHandler(config)
 
-        # We can't fully initialize LocalBackend in a unit test (it needs
-        # ONNX / sentence-transformers), so we just verify the branch was
-        # taken: the external-discovery error must NOT be raised. Instead
-        # we expect either success or an import/embedder error — never a
-        # "No entry point registered" ValueError.
-        with pytest.raises(Exception) as exc_info:
+        # LocalBackend may initialize cleanly if deps are present, or it may
+        # raise an import/embedder error. Either outcome is fine; the only
+        # thing we must never see is the external-discovery ValueError.
+        exc_str = ""
+        try:
             asyncio.run(handler._init_backend_locked())
+            handler._initialized = True  # mirrors normal success path
+        except Exception as exc:  # noqa: BLE001
+            exc_str = str(exc)
 
-        assert "No entry point registered" not in str(exc_info.value)
-        assert "external_backend_name" not in str(exc_info.value)
+        assert "No entry point registered" not in exc_str
+        assert "external_backend_name" not in exc_str
 
     def test_qdrant_neo4j_branch_unchanged(self, monkeypatch):
         """``backend="qdrant-neo4j"`` still routes to its own branch."""
