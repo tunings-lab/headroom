@@ -316,7 +316,14 @@ class ProxyConfig:
 
     # Memory System
     memory_enabled: bool = False
-    memory_backend: Literal["local", "qdrant-neo4j"] = "local"
+    # Accepts built-in names ("local", "qdrant-neo4j"), the sentinel
+    # "external" (paired with ``memory_external_backend_name``), or any
+    # provider name registered under the ``headroom.memory_backend``
+    # entry-point group.
+    memory_backend: str = "local"
+    # When ``memory_backend == "external"``, the entry-point name to
+    # load from the ``headroom.memory_backend`` group.
+    memory_external_backend_name: str = ""
     memory_db_path: str = ""  # Empty = auto: {cwd}/.headroom/memory.db
     # Per-project memory routing (GH #462). ``project`` (the new default)
     # gives each resolved workspace its own SQLite DB so cross-project
