@@ -7,6 +7,10 @@ license.workspace = true
 repository.workspace = true
 description = "Headroom transparent reverse proxy (Rust, axum). Phase 1: drop-in passthrough in front of the Python proxy."
 
+[features]
+default = []
+grpc-tonic = ["opentelemetry-otlp/grpc-tonic", "opentelemetry-otlp/tls-roots"]
+
 [[bin]]
 name = "headroom-proxy"
 path = "src/main.rs"
@@ -93,6 +97,21 @@ async-trait = "0.1"
 # the core uses for the CCR cache_key, so no additional hash backend
 # enters the dep tree.
 md-5 = "0.10"
+# Phase G PR-G4: OpenTelemetry SDK + OTLP exporter for metrics and traces.
+# `opentelemetry` is the API; `opentelemetry_sdk` is the SDK; `opentelemetry-otlp`
+# provides the OTLP exporter. We use `opentelemetry-otlp` with `http-proto`
+# (default) and `reqwest-client` so it reuses the existing async reqwest runtime
+# rather than adding a separate tonic stack. A `grpc-tonic` feature is kept
+# optional for operators that prefer gRPC to the collector.
+opentelemetry = "0.28"
+opentelemetry_sdk = { version = "0.28", features = ["rt-tokio", "experimental_trace_batch_span_processor_with_async_runtime"] }
+# OTLP exporter: HTTP/protobuf + async reqwest client. Using webpki roots avoids
+# depending on native certificate stores inside the proxy binary.
+opentelemetry-otlp = { version = "0.28", default-features = false, features = ["metrics", "trace", "http-proto", "reqwest-client", "reqwest-rustls-webpki-roots"] }
+# PR-G4 remediation: the SDK's `HttpClient` trait lives in `opentelemetry-http`
+# and is not re-exported by `opentelemetry-otlp`. We need it to supply a custom
+# synchronous HTTP client for the metrics `PeriodicReader` (see `otel.rs`).
+opentelemetry-http = "0.28"
 
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }
@@ -118,3 +137,5 @@ sha2 = "0.10"
 # invariants — see `feedback_realignment_build_constraints.md`.
 proptest = "1"
 headroom-simulators = { path = "../headroom-simulators" }
+opentelemetry-proto = { version = "0.32.0", features = ["gen-tonic", "metrics", "trace", "with-serde"] }
+prost = "0.14.1"

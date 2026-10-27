@@ -125,7 +125,7 @@ class MemoryConfig:
     """
 
     enabled: bool = False
-    backend: Literal["local", "qdrant-neo4j"] = "local"
+    backend: Literal["local", "qdrant-neo4j", "surrealdb"] = "local"
     db_path: str = "headroom_memory.db"
     inject_tools: bool = True
     inject_context: bool = True
@@ -140,7 +140,7 @@ class MemoryConfig:
     storage_root: str = ""  # Defaults to dirname(db_path)/memories
     project_root_override: str = ""  # CLI ``--memory-project-root``
     # PR-B6: Memory injection mode. AUTO_TAIL (default) auto-appends retrieved
-    # memory to the latest user message tail. TOOL disables auto-injection;
+    # memory to the latest user message tail (live zone). TOOL disables auto-injection;
     # the model must call ``memory_search`` to retrieve. Configurable per
     # deployment via ``ProxyConfig.memory_mode``.
     mode: MemoryMode = MemoryMode.AUTO_TAIL
@@ -155,6 +155,12 @@ class MemoryConfig:
     neo4j_uri: str = "neo4j://localhost:7687"
     neo4j_user: str = "neo4j"
     neo4j_password: str = "password"
+    # SurrealDB config (defaults resolve from HEADROOM_SURREALDB_* env vars)
+    surrealdb_url: str | None = field(default_factory=lambda: os.environ.get("HEADROOM_SURREALDB_URL"))
+    surrealdb_ns: str = field(default_factory=lambda: os.environ.get("HEADROOM_SURREALDB_NS", "headroom"))
+    surrealdb_db: str = field(default_factory=lambda: os.environ.get("HEADROOM_SURREALDB_DB", "memory"))
+    surrealdb_user: str = field(default_factory=lambda: os.environ.get("HEADROOM_SURREALDB_USER", "root"))
+    surrealdb_pass: str = field(default_factory=lambda: os.environ.get("HEADROOM_SURREALDB_PASS", ""))
     # Memory Bridge (bidirectional markdown <-> Headroom sync)
     bridge_enabled: bool = False
     bridge_md_paths: list[str] = field(default_factory=list)
@@ -185,6 +191,8 @@ class MemoryHandler:
         self.config = config
         self.agent_type = agent_type
         self._backend: LocalBackend | Any = None
+        # SurrealDB backend instance (loaded lazily)
+        self._surrealdb_backend: Any = None
         # Per-project routing for the local backend. Built in
         # ``_init_backend_locked`` so a single, shared resolver / LRU is
         # kept on the handler. Qdrant deployments use composite user-id
@@ -439,6 +447,58 @@ class MemoryHandler:
                     f"Memory: Failed to import qdrant-neo4j dependencies: {e}. "
                     "Install with: pip install 'headroom-ai[memory-stack]'"
                 )
+                raise
+        elif self.config.backend == "surrealdb":
+            try:
+                # Prefer external entry-point adapter (e.g. headroom-surrealdb)
+                # because headroom does not ship a built-in SurrealDB backend.
+                from importlib.metadata import entry_points
+
+                eps = entry_points(group="headroom.memory_backend")
+                ep = next((e for e in eps if e.name == "surrealdb"), None)
+                if ep is not None:
+                    backend_factory = ep.load()
+                    self._backend = backend_factory(self.config)
+                    if hasattr(self._backend, "ensure_initialized"):
+                        await self._backend.ensure_initialized()
+                    elif hasattr(self._backend, "_ensure_initialized"):
+                        await self._backend._ensure_initialized()
+                    logger.info(
+                        f"Memory: Initialized SurrealDB backend via entry point "
+                        f"({self.config.surrealdb_url}, ns={self.config.surrealdb_ns}, "
+                        f"db={self.config.surrealdb_db})"
+                    )
+                else:
+                    try:
+                        from headroom.memory.backends.surrealdb import SurrealDBBackend, SurrealDBConfig
+                    except ImportError as e:
+                        raise ImportError(
+                            "No SurrealDB backend is installed. Install headroom-surrealdb or "
+                            "headroom-ai[surrealdb]."
+                        ) from e
+
+                    surrealdb_config = SurrealDBConfig(
+                        url=self.config.surrealdb_url or "ws://localhost:8000/rpc",
+                        ns=self.config.surrealdb_ns,
+                        db=self.config.surrealdb_db,
+                        user=self.config.surrealdb_user,
+                        pass_=self.config.surrealdb_pass,
+                    )
+                    self._surrealdb_backend = SurrealDBBackend(surrealdb_config)
+                    await self._surrealdb_backend.ensure_initialized()
+                    self._backend = self._surrealdb_backend
+                    logger.info(
+                        f"Memory: Initialized SurrealDB backend ({surrealdb_config.url}, "
+                        f"ns={surrealdb_config.ns}, db={surrealdb_config.db})"
+                    )
+            except ImportError as e:
+                logger.error(
+                    f"Memory: Failed to import SurrealDB dependencies: {e}. "
+                    "Install with: pip install 'headroom-ai[surrealdb]'"
+                )
+                raise
+            except Exception as e:
+                logger.error(f"Memory: Failed to initialize SurrealDB backend: {e}")
                 raise
         else:
             raise ValueError(f"Unknown memory backend: {self.config.backend}")

@@ -89,7 +89,42 @@ def _register_minimax_pricing() -> None:
         litellm.model_cost["MiniMax-M3"] = dict(litellm.model_cost[source_key])
 
 
+def _register_local_sglang_pricing() -> None:
+    """Pre-register the Orion cluster's local sglang-hosted Gemma model as $0.
+
+    Self-hosted, so real cost is zero -- but LiteLLM's cost_per_token still
+    calls get_llm_provider() on the model string first, and the bare id
+    "google/gemma-4-12B-it" isn't a provider prefix LiteLLM recognizes (that
+    would need to be "gemini/" or "vertex_ai/"), so every uncached call
+    raised "LLM Provider NOT provided" and printed LiteLLM's red diagnostic
+    line once per request. resolve_litellm_model() falls back to the
+    "openai/<model>" candidate (see litellm_model_resolution.py) to get a
+    provider LiteLLM does recognize; this entry must be keyed the same way
+    so that candidate actually resolves instead of raising "model isn't
+    mapped yet".
+    """
+    if not LITELLM_AVAILABLE:
+        return
+    key = "openai/google/gemma-4-12B-it"
+    if key not in litellm.model_cost:
+        litellm.model_cost[key] = {
+            "input_cost_per_token": 0.0,
+            "output_cost_per_token": 0.0,
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "max_input_tokens": 131072,
+            "max_output_tokens": 131072,
+        }
+    # Warm the resolver cache now (at import time) rather than on the first
+    # live request -- resolve_litellm_model()'s first, unprefixed probe
+    # candidate is expected to fail and print LiteLLM's diagnostic line
+    # before falling back to the "openai/" candidate above; doing that once
+    # here keeps it out of request-path logs entirely.
+    resolve_litellm_model("google/gemma-4-12B-it")
+
+
 _register_minimax_pricing()
+_register_local_sglang_pricing()
 
 
 @dataclass

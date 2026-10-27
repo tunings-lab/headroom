@@ -653,6 +653,19 @@ def dashboard(port: int, no_open: bool) -> None:
     ),
 )
 @click.option(
+    "--memory-backend",
+    type=click.Choice(["local", "qdrant-neo4j", "surrealdb"], case_sensitive=False),
+    default="local",
+    show_default=True,
+    envvar="HEADROOM_MEMORY_BACKEND",
+    help=(
+        "Memory storage backend. local (default): embedded SQLite + HNSW. "
+        "qdrant-neo4j: external Qdrant vector store + Neo4j graph. "
+        "surrealdb: external SurrealDB with vector/graph support. "
+        "Env: HEADROOM_MEMORY_BACKEND."
+    ),
+)
+@click.option(
     "--memory-db-path",
     default="",
     envvar="HEADROOM_MEMORY_DB_PATH",
@@ -744,6 +757,39 @@ def dashboard(port: int, no_open: bool) -> None:
     "--memory-qdrant-api-key",
     default=None,
     help=("API key for hosted Qdrant (e.g. Qdrant Cloud). Also reads HEADROOM_QDRANT_API_KEY."),
+)
+@click.option(
+    "--memory-surrealdb-url",
+    default=None,
+    envvar="HEADROOM_SURREALDB_URL",
+    help=(
+        "SurrealDB connection URL (e.g. ws://localhost:8000/rpc). "
+        "Also reads HEADROOM_SURREALDB_URL."
+    ),
+)
+@click.option(
+    "--memory-surrealdb-ns",
+    default="headroom",
+    envvar="HEADROOM_SURREALDB_NS",
+    help=("SurrealDB namespace to use (default: headroom, env: HEADROOM_SURREALDB_NS)."),
+)
+@click.option(
+    "--memory-surrealdb-db",
+    default="memory",
+    envvar="HEADROOM_SURREALDB_DB",
+    help=("SurrealDB database to use (default: memory, env: HEADROOM_SURREALDB_DB)."),
+)
+@click.option(
+    "--memory-surrealdb-user",
+    default="root",
+    envvar="HEADROOM_SURREALDB_USER",
+    help=("SurrealDB username (default: root, env: HEADROOM_SURREALDB_USER)."),
+)
+@click.option(
+    "--memory-surrealdb-pass",
+    default="",
+    envvar="HEADROOM_SURREALDB_PASS",
+    help=("SurrealDB password (default: empty, env: HEADROOM_SURREALDB_PASS)."),
 )
 # Traffic Learning (live pattern extraction from proxy traffic)
 @click.option(
@@ -927,6 +973,7 @@ def proxy(
     read_maturation_max_hold_turns: int,
     read_maturation_min_size_bytes: int,
     memory: bool,
+    memory_backend: str,
     memory_db_path: str,
     memory_storage: str,
     memory_project_root: str,
@@ -937,6 +984,11 @@ def proxy(
     memory_qdrant_host: str | None,
     memory_qdrant_port: int | None,
     memory_qdrant_api_key: str | None,
+    memory_surrealdb_url: str | None,
+    memory_surrealdb_ns: str,
+    memory_surrealdb_db: str,
+    memory_surrealdb_user: str,
+    memory_surrealdb_pass: str,
     learn: bool,
     no_learn: bool,
     min_evidence: int | None,
@@ -1106,6 +1158,20 @@ def proxy(
     if memory_qdrant_api_key is not None:
         qdrant_overrides["memory_qdrant_api_key"] = memory_qdrant_api_key
 
+    # SurrealDB connection. CLI flags default to None / model defaults; explicit
+    # CLI values win over HEADROOM_SURREALDB_* env vars.
+    surrealdb_overrides: dict[str, Any] = {}
+    if memory_surrealdb_url is not None:
+        surrealdb_overrides["memory_surrealdb_url"] = memory_surrealdb_url
+    if memory_surrealdb_ns != "headroom" or os.environ.get("HEADROOM_SURREALDB_NS"):
+        surrealdb_overrides["memory_surrealdb_ns"] = memory_surrealdb_ns
+    if memory_surrealdb_db != "memory" or os.environ.get("HEADROOM_SURREALDB_DB"):
+        surrealdb_overrides["memory_surrealdb_db"] = memory_surrealdb_db
+    if memory_surrealdb_user != "root" or os.environ.get("HEADROOM_SURREALDB_USER"):
+        surrealdb_overrides["memory_surrealdb_user"] = memory_surrealdb_user
+    if memory_surrealdb_pass or os.environ.get("HEADROOM_SURREALDB_PASS"):
+        surrealdb_overrides["memory_surrealdb_pass"] = memory_surrealdb_pass
+
     config = ProxyConfig(
         host=host,
         port=port,
@@ -1211,6 +1277,7 @@ def proxy(
         # --learn implies --memory (need backend for storing patterns)
         # Stateless mode disables memory (requires SQLite on disk)
         memory_enabled=False if is_stateless else (memory or (learn and not no_learn)),
+        memory_backend=cast(Literal["local", "qdrant-neo4j", "surrealdb"], memory_backend.lower()),
         memory_db_path=memory_db_path,
         memory_storage_mode=cast(Literal["project", "user", "global"], memory_storage.lower()),
         memory_project_root_override=memory_project_root,
@@ -1218,6 +1285,7 @@ def proxy(
         memory_inject_context=not no_memory_context,
         memory_top_k=memory_top_k,
         **qdrant_overrides,
+        **surrealdb_overrides,
         # Traffic Learning: only with --learn, never with --no-learn
         # Stateless mode disables learning (requires filesystem)
         traffic_learning_enabled=False if is_stateless else (learn and not no_learn),

@@ -25,6 +25,10 @@ use crate::config::Config;
 use crate::error::ProxyError;
 use crate::headers::{build_forward_request_headers, filter_response_headers};
 use crate::health::{healthz, healthz_upstream};
+use crate::observability::{
+    record_compression_bytes, record_compression_decision, record_request_count,
+    record_request_latency,
+};
 use crate::websocket::ws_handler;
 // Phase F PR-F1: imported as `classify_auth_mode` to make the call
 // site self-documenting. `AuthMode` is re-exported under the same
@@ -301,17 +305,30 @@ async fn catch_all(
     ws: Option<WebSocketUpgrade>,
     req: Request<Body>,
 ) -> Response<Body> {
-    if is_websocket_upgrade(req.headers()) {
-        if let Some(ws) = ws {
-            return ws_handler(ws, state, client_addr, req).await;
-        }
-        // Header says websocket but axum didn't extract it (likely missing
-        // Sec-WebSocket-Key) — fall through to HTTP forwarding which will
-        // surface the upstream error.
-    }
-    forward_http(state, client_addr, req)
-        .await
-        .unwrap_or_else(|e| e.into_response())
+    let request_id = ensure_request_id(req.headers()).to_string();
+    let method = req.method().as_str().to_string();
+    let path = req.uri().path().to_string();
+
+    crate::observability::otel::in_request_span(
+        "headroom_proxy_request",
+        request_id,
+        method,
+        path,
+        async move {
+            if is_websocket_upgrade(req.headers()) {
+                if let Some(ws) = ws {
+                    return ws_handler(ws, state, client_addr, req).await;
+                }
+                // Header says websocket but axum didn't extract it (likely missing
+                // Sec-WebSocket-Key) — fall through to HTTP forwarding which will
+                // surface the upstream error.
+            }
+            forward_http(state, client_addr, req)
+                .await
+                .unwrap_or_else(|e| e.into_response())
+        },
+    )
+    .await
 }
 
 /// True if `Content-Type` is `application/json` (with any optional
@@ -732,6 +749,7 @@ pub(crate) async fn forward_http(
                         body_bytes = buffered.len(),
                         "openai chat compression skipped pre-dispatch"
                     );
+                    record_compression_decision("/v1/chat/completions", "skip", skip.as_log_str());
                     compression::Outcome::NoCompression
                 } else {
                     compression::compress_openai_chat_request(
@@ -825,6 +843,10 @@ pub(crate) async fn forward_http(
                             entry.original_tokens,
                             entry.compressed_tokens,
                         );
+                    }
+                    let bytes_saved = original_buffered_len.saturating_sub(body.len()) as u64;
+                    if bytes_saved > 0 {
+                        record_compression_bytes(&path_for_log, "live_zone", bytes_saved);
                     }
                 } else if tokens_before > 0 && tokens_after < tokens_before {
                     tracing::debug!(
@@ -1098,6 +1120,11 @@ pub(crate) async fn forward_http(
     let response = response
         .body(body)
         .map_err(|e| ProxyError::InvalidHeader(e.to_string()))?;
+
+    let latency = start.elapsed();
+    let status_u16 = status.as_u16();
+    record_request_count(method.as_str(), &path_for_log, status_u16);
+    record_request_latency(method.as_str(), &path_for_log, status_u16, latency.as_secs_f64());
 
     tracing::info!(
         request_id = %request_id,

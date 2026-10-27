@@ -41,12 +41,19 @@
 pub mod cache_hit_rate;
 pub mod compression_ratio;
 pub mod metric_names;
+pub mod otel;
 pub mod prometheus;
 pub mod proxy_metrics;
 
 pub use prometheus::{
     handle_metrics, observe_bedrock_invoke_latency, record_bedrock_eventstream_message,
     record_bedrock_invoke,
+};
+
+// Phase G PR-G4: OTLP metric emit helpers.
+pub use otel::{
+    init as init_otel, record_compression_bytes, record_compression_decision,
+    record_request_count, record_request_latency, shutdown as shutdown_otel,
 };
 
 // Phase G PR-G3 — re-export the canonical record_* helpers so call

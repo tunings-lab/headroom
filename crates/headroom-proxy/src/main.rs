@@ -8,6 +8,8 @@ use std::net::SocketAddr;
 
 use clap::Parser;
 use headroom_proxy::config::CliArgs;
+use headroom_proxy::observability::otel::OtelConfig;
+use headroom_proxy::observability::{self};
 use headroom_proxy::{build_app, AppState, Config};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -19,6 +21,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let config = Config::from_cli(args);
 
     init_tracing(&config.log_level);
+
+    let otel_config = OtelConfig::from_env();
+    let otel = observability::otel::init(&otel_config).await;
+    if otel.is_some() {
+        tracing::info!(
+            event = "otel_enabled",
+            service_name = %otel_config.service_name,
+            metrics_enabled = otel_config.metrics_enabled,
+            traces_enabled = otel_config.traces_enabled,
+            metrics_endpoint = %otel_config.metrics_endpoint,
+            traces_endpoint = %otel_config.traces_endpoint,
+            "OpenTelemetry OTLP exporter enabled"
+        );
+        // PR-G4 smoke-test aid: print to stderr so integration tests can see the provider was installed.
+        eprintln!("OTEL enabled endpoint metrics={} traces={}", otel_config.metrics_endpoint, otel_config.traces_endpoint);
+    }
 
     tracing::info!(
         listen = %config.listen,
@@ -76,6 +94,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 "draining in-flight requests before exit"
             );
             tokio::time::sleep(grace).await;
+            observability::otel::shutdown().await;
+            tracing::info!(event = "otel_shutdown_complete", "OpenTelemetry providers flushed");
         })
         .await?;
 

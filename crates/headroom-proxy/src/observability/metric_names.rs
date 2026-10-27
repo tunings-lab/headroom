@@ -113,6 +113,35 @@ pub const LABEL_PATH: &str = "path";
 pub const LABEL_TIER: &str = "tier";
 pub const LABEL_STATUS: &str = "status";
 
+// Phase G PR-G4: OTLP metric name vocabulary (mirrors Prometheus
+// surfaces; emitted via OpenTelemetry SDK when HEADROOM_OTEL_ENABLED=1).
+
+pub const METRIC_OTEL_REQUEST_LATENCY_SECONDS: &str = "headroom_proxy_request_latency_seconds";
+pub const METRIC_OTEL_REQUEST_LATENCY_SECONDS_HELP: &str =
+    "HTTP request latency at the Rust proxy entry boundary, in seconds. \
+     Labelled by method, path, and upstream status class.";
+
+pub const METRIC_OTEL_REQUEST_COUNT_TOTAL: &str = "headroom_proxy_request_count_total";
+pub const METRIC_OTEL_REQUEST_COUNT_TOTAL_HELP: &str =
+    "Total HTTP requests handled by the Rust proxy. Labelled by method, \
+     path, and upstream status class.";
+
+pub const METRIC_OTEL_COMPRESSION_BYTES_TOTAL: &str = "headroom_proxy_compression_bytes_total";
+pub const METRIC_OTEL_COMPRESSION_BYTES_TOTAL_HELP: &str =
+    "Bytes saved by the live-zone dispatcher (original minus compressed). \
+     Labelled by endpoint and strategy. Negative or zero values are not emitted.";
+
+pub const METRIC_OTEL_COMPRESSION_DECISION_COUNT_TOTAL: &str =
+    "headroom_proxy_compression_decision_count_total";
+pub const METRIC_OTEL_COMPRESSION_DECISION_COUNT_TOTAL_HELP: &str =
+    "Compression gate decisions. Labelled by endpoint, decision, and reason.";
+
+pub const LABEL_METHOD: &str = "method";
+pub const LABEL_DECISION: &str = "decision";
+pub const LABEL_REASON: &str = "reason";
+pub const LABEL_STATUS_CLASS: &str = "status_class";
+pub const LABEL_ENDPOINT: &str = "endpoint";
+
 // ---------- bounded label vocabularies ----------
 
 /// OpenAI service-tier values per the Responses API spec

@@ -7,6 +7,7 @@ Extracted from server.py to keep the codebase maintainable.
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import InitVar, dataclass, field
 from datetime import datetime
 from typing import Any, Literal
@@ -316,7 +317,7 @@ class ProxyConfig:
 
     # Memory System
     memory_enabled: bool = False
-    memory_backend: Literal["local", "qdrant-neo4j"] = "local"
+    memory_backend: Literal["local", "qdrant-neo4j", "surrealdb"] = "local"
     memory_db_path: str = ""  # Empty = auto: {cwd}/.headroom/memory.db
     # Per-project memory routing (GH #462). ``project`` (the new default)
     # gives each resolved workspace its own SQLite DB so cross-project
@@ -349,6 +350,12 @@ class ProxyConfig:
     memory_neo4j_uri: str = "neo4j://localhost:7687"
     memory_neo4j_user: str = "neo4j"
     memory_neo4j_password: str = ""
+    # SurrealDB connection (defaults resolve from HEADROOM_SURREALDB_* env vars)
+    memory_surrealdb_url: str | None = field(default_factory=lambda: os.environ.get("HEADROOM_SURREALDB_URL"))
+    memory_surrealdb_ns: str = field(default_factory=lambda: os.environ.get("HEADROOM_SURREALDB_NS", "headroom"))
+    memory_surrealdb_db: str = field(default_factory=lambda: os.environ.get("HEADROOM_SURREALDB_DB", "memory"))
+    memory_surrealdb_user: str = field(default_factory=lambda: os.environ.get("HEADROOM_SURREALDB_USER", "root"))
+    memory_surrealdb_pass: str = field(default_factory=lambda: os.environ.get("HEADROOM_SURREALDB_PASS", ""))
     memory_bridge_enabled: bool = False
     memory_bridge_md_paths: list[str] = field(default_factory=list)
     memory_bridge_md_format: str = "auto"

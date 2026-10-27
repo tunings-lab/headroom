@@ -67,6 +67,21 @@ def resolution_candidates(model: str) -> tuple[str, ...]:
     alias = MODEL_ALIASES.get(model)
     if alias:
         candidates.append(alias)
+    # Self-hosted models often carry an org-style slash prefix (e.g.
+    # "google/gemma-4-12B-it" from a local sglang/vLLM/TGI deployment)
+    # that collides with LiteLLM's own provider-prefix parsing: LiteLLM's
+    # get_llm_provider() only recognizes prefixes *it* maintains, so
+    # "google/" here is misread as "call Google's Gemini API" instead of
+    # being the model's literal id, and raises "LLM Provider NOT provided"
+    # before pricing lookup even starts. Fall back to treating it as a
+    # generic OpenAI-compatible upstream -- correct for anything routed
+    # through an --openai-api-url passthrough proxy, which is the only
+    # context this resolver runs in. Gated on "/" in model: bare names
+    # (e.g. "MiniMax-M3") have no such collision and shouldn't get an
+    # extra candidate. No-op unless a matching model_cost entry is
+    # registered (see litellm_pricing.py).
+    if "/" in model:
+        candidates.append(f"openai/{model}")
     return tuple(dict.fromkeys(candidates))
 
 
